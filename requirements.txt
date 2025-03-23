@@ -6,3 +6,4 @@ newsapi-python
 vaderSentiment
 deep-translator
 gtts
+lxml
