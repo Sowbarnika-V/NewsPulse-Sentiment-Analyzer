@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException, Response  # Handling API creation and Response
+from newsapi import NewsApiClient  # For fetching news articles via NewsAPI
 from bs4 import BeautifulSoup # For Parsing the news content
 import requests # Makes HTTP requests 
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer # Text Sentiment Analyzer
@@ -15,6 +16,13 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI() # Instance of FastAPI application
 
+# Initialize NewsAPI client and VADER Sentiment Analyzer
+try:
+    newsapi = NewsApiClient(api_key="babcd40aef9148edb96c339f0614188e")  # NewsAPI key
+    analyzer = SentimentIntensityAnalyzer()
+except Exception as e:
+    logger.error(f"Initialization error: {e}")
+    raise
 
 # Initialize VaderSentiment Analyzer
 try:
