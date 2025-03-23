@@ -18,7 +18,7 @@ app = FastAPI() # Instance of FastAPI application
 
 # Initialize NewsAPI client and VADER Sentiment Analyzer
 try:
-    newsapi = NewsApiClient(api_key="babcd40aef9148edb96c339f0614188e")  # NewsAPI key
+    newsapi = NewsApiClient(api_key=os.getenv("NEWSAPI_KEY"))  # NewsAPI key
     analyzer = SentimentIntensityAnalyzer()
 except Exception as e:
     logger.error(f"Initialization error: {e}")
