@@ -1,117 +1,219 @@
-# Libraries 
-import streamlit as st # Web Interface
-import requests # HTTP Requests to FastAPI
-import json # Json Data Handling
-import base64   # For encoding and decoding the audio
+from fastapi import FastAPI, HTTPException, Response  # Handling API creation and Response
+from newsapi import NewsApiClient  # For fetching news articles via NewsAPI
+from bs4 import BeautifulSoup # For Parsing the news content
+import requests # Makes HTTP requests 
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer # Text Sentiment Analyzer
+from deep_translator import GoogleTranslator # Translates the English text to Hindi
+from gtts import gTTS  # Provides the text to Speech Functionality
+import os # Handles File Operations 
+import json # Provides Data Serialization
+import logging # Debuuging the code
+
+# Logs
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
-# Streamlit UI 
-st.markdown('<div class="trendy-title">NewsPulse Sentiment Analyzer</div>', unsafe_allow_html=True)
+app = FastAPI() # Instance of FastAPI application
 
-st.markdown("""
-    <style>
-    .trendy-title {
-        color: black;
-        font-size: 40px;
-        font-weight: bold;
-        text-align: center;
-        text-shadow: 1px 1px 2px #000000;
-        margin-bottom: 10px;
-    }
-    .black-subtext {
-        color: black;
-        font-size: 18px;
-        text-align: center;
-        margin-bottom: 20px;
-    }
-    .stApp {
-        background-color: #00CED1;  /* Turquoise background */
-    }
-    .stApp > div {
-        background: rgba(255, 255, 255, 0.3);  /* Semi-transparent white overlay */
-        padding: 20px;
-        border-radius: 10px;
-    }
-    </style>
-    <div class="black-subtext">Enter a company name to analyze news sentiment and hear a Hindi summary.</div>
-    """, unsafe_allow_html=True)
+# Initialize NewsAPI client and VADER Sentiment Analyzer
+try:
+    newsapi = NewsApiClient(api_key="babcd40aef9148edb96c339f0614188e")  # NewsAPI key
+    analyzer = SentimentIntensityAnalyzer()
+except Exception as e:
+    logger.error(f"Initialization error: {e}")
+    raise
+
+# Initialize VaderSentiment Analyzer
+try:
+    analyzer = SentimentIntensityAnalyzer()
+except Exception as e:
+    logger.error(f"Initialization error: {e}")
+    raise
 
 
-# User input
-company = st.text_input("Company Name", "e.g., Tata Motors")
+# Checking whether the news is relevant to the user input (company name)
+def is_relevant_article(company, title, description):
 
-# Analyze the input with provided logic
-if st.button("Analyze"):
-    if company:
-        with st.spinner("Fetching and analyzing news..."):
-            # Call FastAPI backend
-            try:
-                fastapi_url = f"http://localhost:8000/analyze/{company}" # FastAPI endpoint URL
-                response = requests.get(fastapi_url, timeout=120)  # GET request with 120s timeout
-                response.raise_for_status() # HTTP status 
-                response_data = response.json() # json response parsing
+    """Check if the article is relevant to the company."""
 
-                # JSON data and audio Extraction
-                data = json.loads(response_data["data"])  # Parse the JSON string
-                en_audio_bytes = bytes.fromhex(response_data["audio_english"])  # Convert hex back to bytes
-                hi_audio_bytes = bytes.fromhex(response_data["audio_hindi"])    # Convert hex back to bytes
+    # Converting to Lowercase
+    company_lower = company.lower() # User input
+    title_lower = title.lower()
+    description_lower = description.lower()
 
-                # Display JSON output first
-                st.subheader("JSON Output")
-                st.json(data)
+    # Checks for the company name in company appears in title and description
+    return company_lower in title_lower or company_lower in description_lower
 
-                # Download JSON button
-                st.download_button(
-                    label="Download JSON",
-                    data=json.dumps(data, indent=2),
-                    file_name=f"{company}_sentiment_analysis.json",
-                    mime="application/json"
-                )
 
-                # Table Summary
-                st.subheader("News Articles and Sentiment")
-                st.table(data["articles"])
+# Fetech news from Google News RSS
+def fetch_news(company, base_query, page, page_size, seen_titles, report):
 
-                # Overall Summary
-                st.write("**Comparative Analysis:**", data["summary"]["text"])
-                st.write("**Hindi Summary:**", data["summary"]["hindi_text"])
+    """Fetch news articles from Google News RSS for the user query."""
 
-                # Output Audio
-                st.write("**English Audio:**")
-                st.audio(en_audio_bytes, format="audio/mp3")
+    # RSS url with query and pagination
+    url = f"https://news.google.com/rss/search?q={base_query}&hl=en-US&gl=US&ceid=US:en&start={page * page_size}"
+    response = requests.get(url, timeout=10) # Send HTTP request with 10 second timeout
+    response.raise_for_status() # HHTP Status (500 - Server error,etc.,)
 
-                st.write("**Hindi Audio:**")
-                st.audio(hi_audio_bytes, format="audio/mp3")
+    # Parses the content using the beautiful soup
+    soup = BeautifulSoup(response.content, 'xml')
+    items = soup.find_all('item')
 
-            # Provides network-related errors
-            except requests.exceptions.RequestException as e:
-                st.error(f"Error connecting to the backend: {e}")
-            # Json - related errors
-            except json.JSONDecodeError:
-                st.error("Error decoding response from the backend.")
-            #U Unknown errors
-            except Exception as e:
-                st.error(f"Unexpected error: {e}")
-    # if input not provides
-    else:
-        st.warning("Please enter a company name.")
+    for item in items:
 
-# Footer
-st.markdown("""
-    <style>
-    .footer {
-        position: fixed;
-        left: 0;
-        bottom: 0;
-        width: 100%;
-        background-color: white;
-        color: black;
-        text-align: right;
-        padding: 10px;
-        font-size: 14px;
-    }
-    </style>
-    <div class="footer">
-        Design & Developed by Sowbarnika
-    </div>
-    """, unsafe_allow_html=True)
+        # Provides the news title, desc, source and publication date
+        title = item.find('title').text if item.find('title') else "No title"
+        description = item.find('description').text if item.find('description') else "No summary available"
+        source = item.find('source').text if item.find('source') else "Unknown"
+        pub_date = item.find('pubDate').text if item.find('pubDate') else "Unknown"
+
+        
+        description_soup = BeautifulSoup(description, 'html.parser')
+        description = description_soup.get_text()
+
+        # Checking for relevant article
+        if is_relevant_article(company, title, description) and title not in seen_titles:
+            seen_titles.add(title) # To avoid duplicates
+            text = f"{title} {description}"
+            sentiment = analyzer.polarity_scores(text) # Analyzes the sentiment using title and description of the news
+            sentiment_label = "Positive" if sentiment['compound'] > 0.05 else "Negative" if sentiment['compound'] < -0.05 else "Neutral" # Sentiment classification based on score
+            # appends the data to the report
+            report.append({
+                'title': title,
+                'summary': description,
+                'source': source,
+                'date': pub_date,
+                'sentiment': sentiment_label,
+                'score': sentiment['compound']
+            })
+
+        # If ten articles generated, it stops
+        if len(report) >= 10:
+            break
+
+    return len(items) > 0  # Return True if there are more items to fetch
+
+
+# API endpoint 
+@app.get("/analyze/{company}")
+async def analyze_company(company: str):
+    try:
+        logger.info(f"Scraping news for company: {company}")
+        
+        page_size = 10  # Number of articles per request
+        report = []
+        seen_titles = set()  # Unique articles
+        max_pages_per_query = 5  # Limit pagination per query
+        attempted_queries = []  # Track all attempted queries
+
+        # # Define search queries for expanded search
+        queries = [
+            company,
+            f"{company} stock",
+            f"{company} news"
+        ]
+        # Iterate through queries until 10 articles 
+        for query in queries:
+            if len(report) >= 10:
+                break
+            
+            logger.info(f"Trying query: {query}")
+            attempted_queries.append(query)
+            page = 0
+            # Fetch news for up to max_pages_per_query
+            while len(report) < 10 and page < max_pages_per_query:
+                has_more_items = fetch_news(company, query, page, page_size, seen_titles, report)
+                if not has_more_items:
+                    break
+                page += 1
+
+        # Log if less than 10 unique articles found
+        if len(report) < 10:
+            logger.warning(f"Only {len(report)} unique relevant articles found for {company} after expanded search. "
+                           f"Attempted queries: {', '.join(attempted_queries)}")
+
+        # Overall Analysis
+        total_articles = len(report)
+        positive = len([r for r in report if r['sentiment'] == "Positive"])
+        negative = len([r for r in report if r['sentiment'] == "Negative"])
+        neutral = total_articles - positive - negative
+        avg_score = sum(r['score'] for r in report) / total_articles if total_articles > 0 else 0
+
+        #Overall Summary
+        summary = (f"{company} news: {total_articles} articles analyzed. "
+                   f"{positive} Positive ({positive/total_articles*100:.1f}%), "
+                   f"{negative} Negative ({negative/total_articles*100:.1f}%), "
+                   f"{neutral} Neutral ({neutral/total_articles*100:.1f}%). "
+                   f"Average sentiment score: {avg_score:.2f}")
+
+        # Hindi Translation
+        hindi_summary = GoogleTranslator(source='en', target='hi').translate(summary)
+
+        # English and Hindi Audio files
+        en_audio_file = "english_output.mp3"
+        hi_audio_file = "hindi_output.mp3"
+        
+        # Audio generation using gTTs
+        try:
+            tts_en = gTTS(text=summary, lang='en', slow=False)
+            tts_en.save(en_audio_file)
+            tts_hi = gTTS(text=hindi_summary, lang='hi', slow=False)
+            tts_hi.save(hi_audio_file)
+        except Exception as e:
+            logger.error(f"Error generating audio: {e}")
+            raise HTTPException(status_code=500, detail=f"Audio generation failed: {e}")
+
+        # Reading audio files
+        try:
+            with open(en_audio_file, "rb") as f:
+                en_audio_bytes = f.read()
+            with open(hi_audio_file, "rb") as f:
+                hi_audio_bytes = f.read()
+        except Exception as e:
+            logger.error(f"Error reading audio files: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to read audio files: {e}")
+
+        # Cleaning audio files
+        try:
+            os.remove(en_audio_file)
+            os.remove(hi_audio_file)
+        except Exception as e:
+            logger.warning(f"Error cleaning up audio files: {e}")
+
+        # JSON output (excluding audio)
+        json_output = {
+            "company": company,
+            "total_articles": total_articles,
+            "articles": report,
+            "summary": {
+                "text": summary,
+                "hindi_text": hindi_summary,
+                "positive": {"count": positive, "percentage": positive/total_articles*100 if total_articles > 0 else 0},
+                "negative": {"count": negative, "percentage": negative/total_articles*100 if total_articles > 0 else 0},
+                "neutral": {"count": neutral, "percentage": neutral/total_articles*100 if total_articles > 0 else 0},
+                "average_sentiment_score": avg_score
+            }
+        }
+
+        # Combine JSON and audio 
+        response_data = {
+            "data": json.dumps(json_output),  # JSON as a string
+            "audio_english": en_audio_bytes.hex(),  # Audio as hex string
+            "audio_hindi": hi_audio_bytes.hex()     # Audio as hex string
+        }
+        # Return the response as JSON
+        return Response(content=json.dumps(response_data), media_type="application/json")
+
+    # HTTP exceptions
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
+
+if __name__ == "__main__":
+    # Import uvicorn to run the server
+    import uvicorn
+    # Start the server on all interfaces at port 8000
+    uvicorn.run(app, host="0.0.0.0", port=8000)
